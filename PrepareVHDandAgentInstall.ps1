@@ -63,13 +63,17 @@ Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
 
 Write-Host "Allow WinRM through the three firewall profiles (domain, private, and public), and enable the PowerShell remote service." -ForegroundColor red -BackgroundColor white
 Enable-PSRemoting -Force
-Set-NetFirewallRule -DisplayName "Windows Remote Management (HTTP-In)" -Enabled True
+Set-NetFirewallRule -Name WINRM-HTTP-In-TCP, WINRM-HTTP-In-TCP-PUBLIC -Enabled True
 
 Write-Host "Enable the following firewall rules to allow the RDP traffic." -ForegroundColor red -BackgroundColor white
 Set-NetFirewallRule -Group '@FirewallAPI.dll,-28752' -Enabled True
 
 Write-Host "Enable the rule for file and printer sharing so the VM can respond to a ping command inside the virtual network." -ForegroundColor red -BackgroundColor white
 Set-NetFirewallRule -Name FPS-ICMP4-ERQ-In -Enabled True
+
+Write-Host "Create a rule for the Azure platform network." -ForegroundColor red -BackgroundColor white
+New-NetFirewallRule -DisplayName AzurePlatform -Direction Inbound -RemoteAddress 168.63.129.16 -Profile Any -Action Allow -EdgeTraversalPolicy Allow
+New-NetFirewallRule -DisplayName AzurePlatform -Direction Outbound -RemoteAddress 168.63.129.16 -Profile Any -Action Allow
 
 Write-Host "Set the Boot Configuration Data (BCD) settings." -ForegroundColor red -BackgroundColor white
 bcdedit /set "{bootmgr}" integrityservices enable
@@ -116,7 +120,7 @@ Write-Host "Find latest version" -ForegroundColor red -BackgroundColor white
 # Find latest installer
 $url = 'https://github.com/Azure/WindowsVMAgent/releases'
 $site = Invoke-WebRequest -UseBasicParsing -Uri $url
-$table = $site.links | ?{ $_.tagName -eq 'A' -and $_.href.ToLower().Contains('windowsazurevmagent') -and $_.href.ToLower().EndsWith("msi") } | sort href -desc | select href -first 1
+$table = $site.links | ?{ $_.tagName -eq 'A' -and $_.href.ToLower().Contains('windowsazurevmagent') -and $_.href.ToLower().Contains('amd64') -and $_.href.ToLower().EndsWith("msi") } | sort href -desc | select href -first 1
 $filename = $table.href.ToString()
 
 Write-Host "Download latest installer" -ForegroundColor red -BackgroundColor white
