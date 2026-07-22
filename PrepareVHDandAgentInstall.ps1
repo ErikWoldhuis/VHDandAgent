@@ -54,10 +54,9 @@ Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\W
 Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\Winstations\RDP-Tcp' -Name "fReconnectSame" -Value 0 -Type DWord -Force
 
 Write-Host "Remove any self-signed certificates tied to the RDP listener." -ForegroundColor red -BackgroundColor white
-if ((Get-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp').Property -contains "SSLCertificateSHA1Hash")
-{
+if ((Get-Item -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp').Property -contains "SSLCertificateSHA1Hash") {
     Remove-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SSLCertificateSHA1Hash" -Force
-    }
+}
 Write-Host "Turn on Windows Firewall on the three profiles (domain, standard, and public)" -ForegroundColor red -BackgroundColor white
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled True
 
@@ -94,7 +93,12 @@ Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -Na
 
 # Set up the guest OS to collect user mode dumps on a service crash event
 $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
-if ((Test-Path -Path $key) -eq $false) {(New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name LocalDumps)}
+if ((Test-Path -Path $key) -eq $false) {
+    New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting' -Name LocalDumps | Out-Null
+}
+if (-not (Test-Path -Path 'C:\CrashDumps')) {
+    New-Item -Path 'C:\CrashDumps' -ItemType Directory | Out-Null
+}
 New-ItemProperty -Path $key -Name DumpFolder -Type ExpandString -Force -Value "c:\CrashDumps"
 New-ItemProperty -Path $key -Name CrashCount -Type DWord -Force -Value 10
 New-ItemProperty -Path $key -Name DumpType -Type DWord -Force -Value 2
@@ -104,39 +108,52 @@ Write-Host "Verify that the Windows Management Instrumentation (WMI) repository 
 winmgmt /verifyrepository
 
 Write-Host "Checking if Agent installer is present" -ForegroundColor red -BackgroundColor white
-$AgentExists = "C:\agent.msi"
-$FileExists = Test-Path $AgentExists
-If ($FileExists -eq $True) {
-Write-Host "Removing old installer" -ForegroundColor red -BackgroundColor white
-Remove-Item $AgentExists
+$AgentInstallerPath = 'C:\agent.msi'
+if (Test-Path -Path $AgentInstallerPath) {
+    Write-Host "Removing old installer" -ForegroundColor red -BackgroundColor white
+    Remove-Item -Path $AgentInstallerPath -Force -ErrorAction SilentlyContinue
 }
-Else {Write-Host "Nothing to remove" -ForegroundColor red -BackgroundColor white}
+else {
+    Write-Host "Nothing to remove" -ForegroundColor red -BackgroundColor white
+}
 
 Write-Host "Find latest version" -ForegroundColor red -BackgroundColor white
-# Find latest installer
-$url = 'https://github.com/Azure/WindowsVMAgent/releases'
-$site = Invoke-WebRequest -UseBasicParsing -Uri $url
-$table = $site.links | ?{ $_.tagName -eq 'A' -and $_.href.ToLower().Contains('windowsazurevmagent') -and $_.href.ToLower().EndsWith("msi") } | sort href -desc | select href -first 1
-$filename = $table.href.ToString()
+# Get latest VM agent installer from the GitHub releases API.
+$url = 'https://api.github.com/repos/Azure/WindowsVMAgent/releases/latest'
+try {
+    $release = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = 'PowerShell' } -ErrorAction Stop
+    $asset = $release.assets |
+        Where-Object { $_.name -match 'windowsazurevmagent.*\.msi$' } |
+        Sort-Object -Property name -Descending |
+        Select-Object -First 1
+
+    if (-not $asset) {
+        throw "Could not find a Windows Azure VM Agent MSI asset in the latest release."
+    }
+
+    $src = $asset.browser_download_url
+}
+catch {
+    Write-Host "Failed to resolve latest VM agent installer: $_" -ForegroundColor red -BackgroundColor white
+    exit 1
+}
 
 Write-Host "Download latest installer" -ForegroundColor red -BackgroundColor white
 # Download installer
-$src = "https://github.com" + $filename
-Invoke-WebRequest $src -OutFile C:\agent.msi
+Invoke-WebRequest -Uri $src -OutFile $AgentInstallerPath -ErrorAction Stop
 
 Write-Host "Installing VM agent" -ForegroundColor red -BackgroundColor white
-# Install
-C:\agent.msi /quiet
+Start-Process -FilePath $AgentInstallerPath -ArgumentList '/quiet' -Wait -NoNewWindow -ErrorAction Stop
 
-#Wait for 30 seconds to allow the Azure VM agent to install
+# Wait for 30 seconds to allow the Azure VM agent to install
 Write-Host "Waiting for agent to complete installation" -ForegroundColor red -BackgroundColor white
-Start-Sleep -s 30
+Start-Sleep -Seconds 30
 
 Write-Host "Removing agent installer" -ForegroundColor red -BackgroundColor white
-$AgentExists = "C:\agent.msi"
-$FileExists = Test-Path $AgentExists
-If ($FileExists -eq $True) {
-Write-Host "Removed agent installer" -ForegroundColor red -BackgroundColor white
-Remove-Item $AgentExists
+if (Test-Path -Path $AgentInstallerPath) {
+    Write-Host "Removed agent installer" -ForegroundColor red -BackgroundColor white
+    Remove-Item -Path $AgentInstallerPath -Force -ErrorAction SilentlyContinue
 }
-Else {Write-Host "Nothing to remove" -ForegroundColor red -BackgroundColor white}
+else {
+    Write-Host "Nothing to remove" -ForegroundColor red -BackgroundColor white
+}
